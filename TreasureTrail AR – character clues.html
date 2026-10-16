@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TreasureTrail AR</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1d1d1b;--mu:#6b6a64;--ac:#c2410c;--ln:#ddd9cf;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#161614;--card:#222220;--tx:#eeece6;--mu:#a09e95;--ac:#fb923c;--ln:#3a3935}}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,sans-serif;overflow:hidden}
+.scr{position:absolute;inset:0;padding:20px;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center}
+.scr.on{display:flex}
+h1{font-size:30px;margin:0}.mu{color:var(--mu);font-size:13px}
+button,select,textarea{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:11px 18px}
+button.pri{background:var(--ac);color:#fff;border-color:var(--ac);font-size:18px;padding:14px 36px}
+textarea{width:min(360px,100%);height:90px}
+#ar{padding:0;justify-content:flex-start;background:#111}
+#cv,#vid{position:absolute;inset:0;width:100%;height:100%}
+#vid{object-fit:cover}
+.top{position:absolute;top:calc(env(safe-area-inset-top,0px)+10px);left:10px;right:10px;display:flex;justify-content:space-between;gap:8px;color:#fff;text-shadow:0 1px 4px #000;font-size:14px}
+.chip{background:rgba(0,0,0,.5);padding:5px 12px;border-radius:99px}
+#bubble{position:absolute;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom,0px)+110px);background:var(--card);color:var(--tx);border-radius:16px;padding:14px;text-align:left;display:none;box-shadow:0 4px 20px #0006}
+#bubble b{color:var(--ac)}
+.pad{position:absolute;bottom:calc(env(safe-area-inset-bottom,0px)+14px);left:0;right:0;display:flex;justify-content:center;gap:12px}
+.pad button{width:64px;height:64px;border-radius:50%;font-size:24px;padding:0;background:rgba(0,0,0,.55);color:#fff;border-color:#fff4;touch-action:none}
+#scan{position:absolute;top:42%;left:0;right:0;text-align:center;color:#fff;text-shadow:0 1px 6px #000;font-size:18px;pointer-events:none}
+</style></head><body>
+
+<div class="scr on" id="home">
+ <div style="font-size:64px">🎁</div><h1>TreasureTrail AR</h1>
+ <div class="mu">A colleague hid a gift. Walk around, scan the area, and follow the clues.</div>
+ <button class="pri" id="go">▶ Start</button>
+ <button id="hideb">🎄 Hide a gift for a colleague</button>
+ <label class="mu"><input type="checkbox" id="real"> Use real GPS + compass (outdoors on phone)</label>
+ <button class="mu" id="reset" style="border:0;background:none;text-decoration:underline">Clear my hidden gifts</button>
+ <div class="mu" id="hmsg"></div>
+</div>
+
+<div class="scr" id="hide">
+ <h1 style="font-size:22px">Hide a gift here</h1>
+ <div class="mu">Stand where the gift is hidden (or where the clue should appear), then save.</div>
+ <select id="emo"><option>🧝 Elf</option><option>🤖 Robot</option><option>🦊 Fox</option></select>
+ <textarea id="clue" placeholder="Write the clue, e.g. 'Look behind the poster near the coffee machine!'"></textarea>
+ <button class="pri" id="save">Save at my position</button><button id="back1">← Back</button><div class="mu" id="smsg"></div>
+</div>
+
+<div class="scr" id="ar">
+ <video id="vid" playsinline muted></video><canvas id="cv"></canvas>
+ <div class="top"><span class="chip" id="stat">Gift 1</span><span class="chip" id="dist">–</span><button class="chip" id="exit" style="border:0;color:#fff;padding:5px 12px">✕</button></div>
+ <div id="scan">Scanning… walk around and look around you</div>
+ <div id="bubble"><b id="who"></b><p id="txt" style="margin:6px 0 10px"></p><button class="pri" id="nx" style="font-size:15px;padding:8px 22px">Got it →</button></div>
+ <div class="pad" id="pad"><button id="tl">⟲</button><button id="wk">▲</button><button id="tr">⟳</button></div>
+</div>
+
+<script>
+const $=s=>document.getElementById(s),D=Math.PI/180,R=6371000,wrap=a=>((a+540)%360)-180;
+const O={lat:40,lon:-75},off=(n,e)=>({lat:O.lat+n/R/D,lon:O.lon+e/(R*Math.cos(O.lat*D))/D});
+const DEMO=[{...off(30,25),emo:"🧝",clue:"Hello! I'm Elfie. Your friend hid a gift near where people refill their coffee. Head towards the green plants next!"},
+ {...off(60,-15),emo:"🤖",clue:"Beep! Warm now. The gift is behind the old notice board. Look for a black-and-white square marker!"}];
+const FINAL="Happy Secret Santa! 🎄 You found it!";
+let saved=[];try{saved=JSON.parse(localStorage.getItem("tt_hunt")||"[]")}catch(e){}
+let real=false,pos={...O},heading=0,k=0,walking=0,turning=0,hunt=[],speaking=false,stream=null,hasPos=false,dwell=0,done=false;
+const show=id=>document.querySelectorAll(".scr").forEach(s=>s.classList.toggle("on",s.id===id));
+// ---- geo ----
+function hav(a,b){const p1=a.lat*D,p2=b.lat*D,dp=p2-p1,dl=(b.lon-a.lon)*D,x=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
+function brg(a,b){const p1=a.lat*D,p2=b.lat*D,dl=(b.lon-a.lon)*D;return(Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))/D+360)%360;}
+// ---- sensors ----
+let est=null,omega=0,tl=0,wid=null;const ALPHA=.98;
+async function startSensors(){real=$("real").checked;if(!real)return;
+ try{if(DeviceOrientationEvent.requestPermission)await DeviceOrientationEvent.requestPermission();}catch(e){}
+ if(wid===null&&navigator.geolocation)wid=navigator.geolocation.watchPosition(p=>{pos={lat:p.coords.latitude,lon:p.coords.longitude};hasPos=true},()=>{$("hmsg").textContent="GPS unavailable"},{enableHighAccuracy:true});
+ addEventListener("devicemotion",m=>{omega=m.rotationRate?-(m.rotationRate.alpha||0):0});
+ addEventListener("deviceorientation",o=>{const ref=o.webkitCompassHeading??(360-(o.alpha||0)),t=performance.now()/1e3;
+  if(est===null)est=ref;else{const dt=Math.min(t-tl,.2),pr=est+omega*dt;est=pr+(1-ALPHA)*wrap(ref-pr);}tl=t;heading=(est+360)%360;});}
+// ---- hide a gift ----
+$("hideb").onclick=async()=>{await startSensors();show("hide");$("smsg").textContent="";};
+$("back1").onclick=()=>show("home");
+$("save").onclick=()=>{if(real&&!hasPos){$("smsg").textContent="Waiting for GPS fix…";return;}
+ saved.push({lat:pos.lat,lon:pos.lon,emo:$("emo").value.split(" ")[0],clue:$("clue").value||"A gift is hidden nearby!"});
+ try{localStorage.setItem("tt_hunt",JSON.stringify(saved))}catch(e){}
+ $("smsg").textContent="Saved ✔ ("+saved.length+" gift stops)";$("clue").value="";};
+$("reset").onclick=()=>{saved=[];try{localStorage.removeItem("tt_hunt")}catch(e){}$("hmsg").textContent="Cleared.";};
+// ---- start ----
+$("go").onclick=async()=>{await startSensors();hunt=saved.length?saved:(real?[]:DEMO);
+ if(!hunt.length){$("hmsg").textContent="No gifts yet. Hide one first (real mode).";return;}
+ if(!real){pos={...O};heading=0;hasPos=true;}
+ k=0;done=false;speaking=false;dwell=0;$("bubble").style.display="none";$("pad").style.display=real?"none":"flex";show("ar");
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});$("vid").srcObject=stream;$("vid").play();}catch(e){stream=null;}
+ requestAnimationFrame(loop);};
+$("exit").onclick=()=>{if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$("vid").srcObject=null;show("home");};
+// ---- controls (simulation) ----
+const hold=(id,fn)=>{const b=$(id);b.onpointerdown=()=>fn(1);b.onpointerup=b.onpointerleave=()=>fn(0)};
+hold("wk",v=>walking=v);hold("tl",v=>turning=-v);hold("tr",v=>turning=v);
+addEventListener("keydown",e=>{if(e.key==="ArrowUp")walking=1;if(e.key==="ArrowLeft")turning=-1;if(e.key==="ArrowRight")turning=1});
+addEventListener("keyup",e=>{if(e.key==="ArrowUp")walking=0;if(["ArrowLeft","ArrowRight"].includes(e.key))turning=0});
+// ---- character drawing ----
+function drawChar(c,x,y,s,t,emo){const bob=Math.sin(t*3)*s*.05;y+=bob;
+ c.save();c.translate(x,y);c.scale(s/100,s/100);c.shadowColor="#0008";c.shadowBlur=20;
+ c.fillStyle="#f97316";c.beginPath();c.ellipse(0,40,34,42,0,0,7);c.fill();c.shadowBlur=0;           // body
+ c.fillStyle="#fde0c5";c.beginPath();c.arc(0,-18,30,0,7);c.fill();                                // head
+ c.fillStyle="#dc2626";c.beginPath();c.moveTo(-30,-30);c.lineTo(0,-85);c.lineTo(30,-30);c.closePath();c.fill();// hat
+ c.fillStyle="#fff";c.beginPath();c.arc(0,-86,8,0,7);c.fill();c.fillRect(-32,-34,64,9);
+ c.fillStyle="#222";c.beginPath();c.arc(-11,-16,4,0,7);c.arc(11,-16,4,0,7);c.fill();
+ c.strokeStyle="#222";c.lineWidth=3;c.beginPath();c.arc(0,-8,10,.2,Math.PI-.2);c.stroke();
+ c.strokeStyle="#f97316";c.lineWidth=9;c.lineCap="round";const w=Math.sin(t*6)*.4;                // waving arm
+ c.beginPath();c.moveTo(30,25);c.lineTo(58,-5+w*30);c.stroke();c.beginPath();c.moveTo(-30,25);c.lineTo(-52,50);c.stroke();
+ c.restore();if(emo&&emo!=="🧝"){c.font=s*.35+"px serif";c.textAlign="center";c.fillText(emo,x+s*.45,y-s*.7);}}
+// ---- main loop ----
+const FOV=62;let last=0;
+function loop(t){if(!$("ar").classList.contains("on"))return;requestAnimationFrame(loop);
+ const dt=Math.min((t-last)/1e3,.1);last=t;const cv=$("cv"),c=cv.getContext("2d"),W=cv.width=cv.clientWidth,H=cv.height=cv.clientHeight;
+ if(!real){heading=(heading+turning*70*dt+360)%360;if(walking&&!speaking){const v=2.5*dt;pos.lat+=Math.cos(heading*D)*v/R/D;pos.lon+=Math.sin(heading*D)*v/(R*Math.cos(pos.lat*D))/D;}}
+ c.clearRect(0,0,W,H);
+ if(!stream){const g=c.createLinearGradient(0,0,0,H);g.addColorStop(0,"#2b3a55");g.addColorStop(1,"#14181f");c.fillStyle=g;c.fillRect(0,0,W,H);
+  c.strokeStyle="#ffffff18";for(let i=-12;i<12;i++){const x=W/2+(i*30-heading)/FOV*W;c.beginPath();c.moveTo(x,0);c.lineTo(x,H);c.stroke();}}
+ if(done){$("scan").textContent="";drawGift(c,W/2,H*.5,t/1e3);return;}
+ const tg=hunt[k],d=hav(pos,tg),b=brg(pos,tg),rel=wrap(b-heading),REVEAL=40,TRIG=12;
+ $("stat").textContent="Gift "+(k+1)+"/"+hunt.length;$("dist").textContent=Math.round(d)+" m";
+ if(d>REVEAL){$("scan").textContent=d>100?"❄ Cold… keep exploring":"🌤 Getting warmer… keep moving";}
+ else if(!speaking){const inFov=Math.abs(rel)<FOV/2;
+  if(inFov){$("scan").textContent="";const x=W/2+rel/FOV*W,s=Math.max(110,Math.min(300,320-d*5));drawChar(c,x,H*.5,s,t/1e3,tg.emo);}
+  else{$("scan").textContent=rel>0?"Something is nearby… look right ▶":"◀ Something is nearby… look left";}
+  dwell=d<TRIG?dwell+dt:0;if(dwell>1){speaking=true;$("who").textContent=tg.emo+" Your colleague's helper says:";$("txt").textContent=tg.clue;$("bubble").style.display="block";$("scan").textContent="";}}
+ else drawChar(c,W/2,H*.4,280,t/1e3,tg.emo);}
+function drawGift(c,x,y,t){c.save();c.translate(x,y+Math.sin(t*3)*8);c.font="120px serif";c.textAlign="center";c.fillText("🎁",0,0);
+ c.font="bold 20px system-ui";c.fillStyle="#fff";c.shadowColor="#000";c.shadowBlur=6;c.fillText(FINAL,0,70);c.restore();}
+$("nx").onclick=()=>{$("bubble").style.display="none";speaking=false;dwell=0;
+ if(k<hunt.length-1){k++;}else{done=true;}};
+</script></body></html>
